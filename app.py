@@ -36,8 +36,8 @@ else:
     )
 
 client = None
-# Verified active Groq model string
-model_name = "llama-3.3-70b-versatile"
+# Using Groq's current active production model ID
+model_name = "openai/gpt-oss-20b"
 
 if groq_key:
     client = OpenAI(
