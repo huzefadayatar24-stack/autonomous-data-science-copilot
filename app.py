@@ -22,33 +22,35 @@ st.set_page_config(
 # SIDEBAR: CONFIGURATION & DATA INGESTION
 # ---------------------------------------------------------
 st.sidebar.title("⚙️ Engine & Data")
+st.sidebar.success("Powered by Groq LPUs for lightning-fast execution.")
 
-# Groq API Configuration
-groq_api_key = st.sidebar.text_input(
-    "Groq API Key",
-    type="password",
-    help="Enter your Groq API key (starts with gsk_)"
-)
-
-model_choice = st.sidebar.selectbox(
-    "Select Model",
-    ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-)
-
-# Initialize OpenAI Client pointing to Groq
-client = None
-if groq_api_key:
-    client = OpenAI(
-        api_key=groq_api_key,
-        base_url="https://api.groq.com/openai/v1"
+# Check if the key is securely hidden in Streamlit Secrets
+if "GROQ_API_KEY" in st.secrets:
+    groq_key = st.secrets["GROQ_API_KEY"]
+else:
+    # Fallback: Show the password box if running locally or secrets aren't set
+    groq_key = st.sidebar.text_input(
+        "Groq API Key", 
+        type="password",
+        help="Enter your Groq key (starts with gsk_)"
     )
 
+client = None
+if groq_key:
+    client = OpenAI(
+        api_key=groq_key, 
+        base_url="https://api.groq.com/openai/v1"
+    )
+    model_name = "llama-3.1-70b-versatile" 
+
 def call_llm(prompt: str, temperature: float = 0.2) -> str:
-    """Helper to query Groq via OpenAI client."""
+    """Helper to query Groq."""
     if not client:
-        raise ValueError("Please provide a valid Groq API Key in the sidebar.")
+        st.stop()
+        raise ValueError("AI Client not initialized. Please enter your Groq API Key.")
+    
     response = client.chat.completions.create(
-        model=model_choice,
+        model=model_name,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature
     )
@@ -109,11 +111,9 @@ if df is not None:
     # ---------------------------------------------------------
     with tabs[0]:
         st.header("Exploratory Data Analysis Agent")
-        st.write("The analyst agent inspects column schemas and automatically generates custom visualizations.")
-        
         if st.button("Run Dynamic EDA Agent", type="primary"):
-            if not groq_api_key:
-                st.error("Please enter a Groq API Key in the sidebar.")
+            if not client:
+                st.error("Please enter your Groq API Key in the sidebar.")
             else:
                 with st.spinner("Agent analyzing dataset and generating custom plots..."):
                     dataset_summary = df.describe(include="all").to_string()
@@ -123,18 +123,16 @@ if df is not None:
 You are an Expert Data Analyst.
 Dataset Schema:
 {dtypes_info}
-
 Statistical Summary:
 {dataset_summary}
 
-Task: Write Python code using matplotlib/seaborn to generate the 2 most insightful figures for this data.
+Write Python code using matplotlib/seaborn to generate the 2 most insightful figures for this data.
 Rules:
 1. Data is in DataFrame named `df`.
 2. Generate two figures: `fig1` and `fig2`.
 3. Output ONLY Python code inside ```python ... ``` blocks.
 """
                     code = extract_python_code(call_llm(viz_prompt, temperature=0.1))
-                    
                     local_scope = {"df": df.copy(), "pd": pd, "np": np, "plt": plt, "sns": sns}
                     try:
                         exec(code, local_scope)
@@ -142,160 +140,84 @@ Rules:
                         fig2 = local_scope.get("fig2")
                         
                         col_a, col_b = st.columns(2)
-                        if fig1:
-                            col_a.pyplot(fig1)
-                        if fig2:
-                            col_b.pyplot(fig2)
-                        st.success("Visualizations generated successfully.")
+                        if fig1: col_a.pyplot(fig1)
+                        if fig2: col_b.pyplot(fig2)
                     except Exception as e:
-                        st.warning(f"Dynamic plotting fallback: {e}")
-                        # Fallback Correlation Heatmap
-                        numeric_df = df.select_dtypes(include=[np.number])
-                        if numeric_df.shape[1] > 1:
-                            fig, ax = plt.subplots(figsize=(8, 6))
-                            sns.heatmap(numeric_df.corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-                            st.pyplot(fig)
+                        st.warning(f"Dynamic plotting fallback due to code error: {e}")
 
-                    # Executive Summary
-                    summary_prompt = f"""
-You are an expert Data Analyst.
-Statistical Summary:
-{dataset_summary}
-
-Provide a 4-bullet executive summary on:
-1. Target distribution.
-2. High-variance/skewed features.
-3. Key interactions/correlations.
-4. Preprocessing recommendations.
-"""
-                    insights = call_llm(summary_prompt, temperature=0.2)
+                    summary_prompt = f"Data Summary:\n{dataset_summary}\nProvide a 4-bullet executive summary on distributions, variance, correlations, and preprocessing recommendations."
                     st.markdown("### 📝 Executive Summary")
-                    st.markdown(insights)
+                    st.markdown(call_llm(summary_prompt, temperature=0.2))
 
     # ---------------------------------------------------------
-    # TAB 2: DATA CLEANING
+    # TAB 2: DATA Cleaning
     # ---------------------------------------------------------
     with tabs[1]:
         st.header("Data Cleaning Agent")
-        st.write("Generates self-executing preprocessing logic to handle missing data, encoding, and duplicates.")
-        
         if st.button("Run Data Cleaning Agent"):
-            if not groq_api_key:
-                st.error("Please enter a Groq API Key in the sidebar.")
+            if not client:
+                st.error("Please enter your Groq API Key in the sidebar.")
             else:
-                with st.spinner("Data Engineer agent writing transformation logic..."):
-                    clean_prompt = f"""
-Given data sample:
-{df.head(5).to_dict()}
-
-Write a function `clean_dataset(df)` that handles missing values, encodes categories, and drops zero-variance columns.
-Output ONLY executable code inside ```python ... ```.
-"""
+                with st.spinner("Writing transformation logic..."):
+                    clean_prompt = f"Data sample:\n{df.head(5).to_dict()}\nWrite `clean_dataset(df)` to handle missing values, encode categories, and drop zero-variance columns. Return ONLY executable python code."
                     code = extract_python_code(call_llm(clean_prompt, temperature=0.1))
                     local_scope = {"df": df.copy(), "pd": pd, "np": np}
                     try:
                         exec(code, local_scope)
                         cleaned_df = local_scope["clean_dataset"](df.copy())
                         st.session_state["cleaned_df"] = cleaned_df
-                        st.success("Dataset successfully cleaned and stored in memory.")
+                        st.success("Dataset successfully cleaned!")
                         st.dataframe(cleaned_df.head(5), use_container_width=True)
-                        
-                        csv_data = cleaned_df.to_csv(index=False).encode('utf-8')
-                        st.download_button(
-                            "Download Cleaned CSV",
-                            data=csv_data,
-                            file_name="cleaned_dataset.csv",
-                            mime="text/csv"
-                        )
                     except Exception as e:
-                        st.error(f"Cleaning execution failed: {e}")
+                        st.error(f"Cleaning failed: {e}")
 
     # ---------------------------------------------------------
     # TAB 3: MULTI-AGENT ML LAB
     # ---------------------------------------------------------
     with tabs[2]:
         st.header("Recursive Multi-Agent Optimization")
-        st.write("Architect, Executor, and Critic agents collaborate to formulate hypotheses, train models, and critique iterations.")
-        
-        rounds = st.slider("Optimization Rounds", min_value=1, max_value=5, value=3)
+        rounds = st.slider("Optimization Rounds", 1, 5, 3)
         
         if st.button("Start Optimization Pipeline", type="primary"):
-            if not groq_api_key:
-                st.error("Please enter a Groq API Key in the sidebar.")
+            if not client:
+                st.error("Please enter your Groq API Key in the sidebar.")
             else:
                 active_df = st.session_state.get("cleaned_df", df)
-                is_classification = active_df[target_col].nunique() <= 10 and active_df[target_col].dtype in ['object', 'int64', 'category']
-                metric_name = "Accuracy" if is_classification else "R2 Score"
-                dataset_summary = active_df.describe().to_string()
+                is_class = active_df[target_col].nunique() <= 10 and active_df[target_col].dtype in ['object', 'int64', 'category']
+                metric_name = "Accuracy" if is_class else "R2 Score"
                 
                 history = []
                 best_score = -float("inf")
-                best_pipeline = None
                 best_code = None
 
                 progress_bar = st.progress(0)
-                status_container = st.container()
-
                 for r in range(1, rounds + 1):
-                    with status_container:
-                        st.markdown(f"#### 🔄 Iteration {r} of {rounds}")
-                        
-                        # 1. Architect
-                        history_text = "\n".join([
-                            f"Round {h['round']}: {metric_name}={h['score']:.4f} | Feedback: {h['feedback']}"
-                            for h in history
-                        ]) or "No prior attempts."
-                        
-                        arch_prompt = f"""
-You are the Lead ML Architect.
-Dataset Summary:
-{dataset_summary}
-Target: '{target_col}' ({'Classification' if is_classification else 'Regression'}).
-History:
-{history_text}
-
-Write `def train_and_evaluate(df):` returning `(float(score), trained_model)`.
-Output ONLY executable code inside ```python ... ```.
-"""
-                        code = extract_python_code(call_llm(arch_prompt, temperature=0.2))
-                        
-                        # 2. Executor
-                        local_scope = {"df": active_df.copy(), "pd": pd, "np": np, "joblib": joblib}
-                        score, error, model_obj = None, None, None
-                        try:
-                            exec(code, local_scope)
-                            score, model_obj = local_scope["train_and_evaluate"](active_df.copy())
-                            st.write(f"✅ **Executor Validation {metric_name}:** `{score:.4f}`")
-                        except Exception:
-                            error = traceback.format_exc()
-                            st.write(f"⚠️ **Execution Error:** `{error.splitlines()[-1]}`")
-
-                        # 3. Critic
-                        critic_prompt = f"Metric: {metric_name}, Score: {score}, Error: {error}. Critique performance in 2 sentences."
-                        feedback = call_llm(critic_prompt, temperature=0.2)
-                        st.info(f"**Critic Analysis:** {feedback}")
-
-                        if score is not None and score > best_score:
+                    st.markdown(f"#### 🔄 Iteration {r}/{rounds}")
+                    history_txt = "\n".join([f"Round {h['round']}: {metric_name}={h['score']} | Critic: {h['feedback']}" for h in history])
+                    
+                    arch_prompt = f"Target: '{target_col}'. History:\n{history_txt}\nWrite `def train_and_evaluate(df):` returning `(float(score), trained_model)`. Output ONLY executable code."
+                    code = extract_python_code(call_llm(arch_prompt, temperature=0.2))
+                    
+                    local_scope = {"df": active_df.copy(), "pd": pd, "np": np, "joblib": joblib}
+                    score, error = None, None
+                    try:
+                        exec(code, local_scope)
+                        score, model_obj = local_scope["train_and_evaluate"](active_df.copy())
+                        st.write(f"✅ **Validation {metric_name}:** `{score:.4f}`")
+                        if score > best_score:
                             best_score = score
-                            best_pipeline = model_obj
                             best_code = code
+                    except Exception:
+                        error = traceback.format_exc()
+                        st.write(f"⚠️ **Error:** `{error.splitlines()[-1]}`")
 
-                        history.append({"round": r, "score": score if score else 0.0, "feedback": feedback})
-                        progress_bar.progress(r / rounds)
-                        time.sleep(0.5)
+                    feedback = call_llm(f"Metric: {metric_name}, Score: {score}, Error: {error}. Critique in 2 sentences.", temperature=0.2)
+                    st.info(f"**Critic Analysis:** {feedback}")
+                    
+                    history.append({"round": r, "score": score if score else 0.0, "feedback": feedback})
+                    progress_bar.progress(r / rounds)
 
                 st.success(f"🏆 Optimization Finished! Highest {metric_name}: {best_score:.4f}")
-
-                if best_pipeline is not None:
-                    buffer = io.BytesIO()
-                    joblib.dump(best_pipeline, buffer)
-                    buffer.seek(0)
-                    st.download_button(
-                        "Download Best Model (.pkl)",
-                        data=buffer,
-                        file_name="best_model.pkl"
-                    )
-
                 if best_code:
                     with st.expander("View Winning Pipeline Code"):
                         st.code(best_code, language="python")
