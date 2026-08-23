@@ -41,7 +41,7 @@ if groq_key:
         api_key=groq_key, 
         base_url="https://api.groq.com/openai/v1"
     )
-    model_name = "llama-3.1-70b-versatile" 
+    model_name = "llama-3.3-70b-versatile" 
 
 def call_llm(prompt: str, temperature: float = 0.2) -> str:
     """Helper to query Groq."""
